@@ -1,0 +1,557 @@
+---
+title: "Gut transplants analysis"
+author: "Rachel Yost, Alison Fowler, Lynn Adler"
+output: html_document
+---
+
+# Libraries 
+```{r}
+library(lattice)
+library(psych)
+library(car)
+library(AER)
+library(MASS)
+library(corrplot)
+library(AICcmodavg)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(mgcv)
+library(scatterplot3d)
+library(bbmle)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(ggalt)
+library(multcomp)
+library(coxme)  
+library(survival)  
+library(DHARMa)
+library(aod)  
+library(pscl) 
+library(writexl)
+library(glmmTMB)
+library(survminer)
+library(fitdistrplus)
+```
+
+# Set up data 
+
+```{r}
+# setwd(" ")
+feces <- read_csv("Yost_fecal_screens.csv")
+bees <- read_csv("Yost_gut_counts.csv")
+```
+
+```{r}
+# make factors 
+bees$Treatment <- as.factor(bees$Treatment)
+bees$Colony <- as.factor(bees$Colony)
+bees$Crithidia_date <- as.factor(bees$Crithidia_date)
+
+# remove NAs
+bees_noNAs <- bees %>% filter(Wing_mm != is.na(Wing_mm))
+
+# sample sizes
+summary(bees_noNAs$Crithidia_date)
+summary(bees_noNAs$Treatment)
+```
+
+# Gut infection data 
+
+## Summaries 
+```{r}
+summary(bees$Colony)
+summary(bees$Treatment)
+summary(bees$Crithidia_date)
+
+bees %>% group_by(Colony, Treatment) %>% summarize(length(Treatment))
+bees %>% group_by(Crithidia_date, Treatment) %>% summarize(length(Treatment))
+bees %>% group_by(Donor1_start, Treatment) %>% summarize(length(Treatment))
+bees %>% group_by(Gut1_date, Treatment) %>% summarize(length(Treatment))
+
+hist(bees$Count)
+```
+
+## Model selection
+
+```{r}
+count_mod1 <- glmmTMB(Count ~ Treatment * Crithidia_date * Colony, data = bees, family = nbinom2())
+
+count_mod2 <- glmmTMB(Count ~ Treatment + Wing_mm + (1|Crithidia_date) + (1|Colony), data = bees, family = nbinom2())
+
+count_mod3 <- glmmTMB(Count ~ Treatment + Wing_mm + (1|Crithidia_date), data = bees, family = nbinom2())
+
+count_mod4 <- glmmTMB(Count ~ Treatment + Wing_mm + (1|Colony), data = bees, family = nbinom2())
+
+count_mod5 <- glmmTMB(Count ~ Treatment + Wing_mm, data = bees, family = nbinom2())
+
+count_mod6 <- glmmTMB(Count ~ Treatment, data = bees, family = nbinom2())
+
+count_mod7 <- glmmTMB(Count ~ Treatment + Wing_mm + Crithidia_date, data = bees, family = nbinom2())
+
+count_mod8 <- glmmTMB(Count ~ Treatment + Wing_mm + Colony, data = bees, family = nbinom2())
+
+count_mod9 <- glmmTMB(Count ~ Treatment + Wing_mm + Colony + Crithidia_date, data = bees, family = nbinom2())
+
+count_mod10 <- glmmTMB(Count ~ Treatment * Wing_mm, data = bees, family = nbinom2())
+
+count_mod11 <- glmmTMB(Count ~ Treatment + Wing_mm*Crithidia_date, data = bees, family = nbinom2())
+
+AICtab(count_mod1, count_mod2, count_mod3, count_mod4, count_mod5, 
+       count_mod6, count_mod7, count_mod8, count_mod9, count_mod10, count_mod11)
+
+# 5 is best but we have some problems with residuals 
+simulateResiduals(count_mod5, plot = T)
+# 11 was next best (delta AIC 0.2) - residuals look better, no red lines 
+simulateResiduals(count_mod11, plot = T)
+```
+
+```{r}
+# Add dispersion fomrula to mod 5 
+count_mod5.1 <- glmmTMB(Count ~ Treatment + Wing_mm, data = bees, dispformula = ~Treatment*Wing_mm, family = nbinom2())
+count_mod5.2 <- glmmTMB(Count ~ Treatment + Wing_mm, data = bees, family = nbinom2()) # no disp, same as mod 5 
+count_mod5.3 <- glmmTMB(Count ~ Treatment + Wing_mm, data = bees, dispformula = ~Treatment + Wing_mm, family = nbinom2())
+count_mod5.4 <- glmmTMB(Count ~ Treatment * Wing_mm, data = bees, dispformula = ~Treatment * Wing_mm, family = nbinom2())
+
+AICtab(count_mod5.1,count_mod5.2, count_mod5.3, count_mod5.4, count_mod11)
+#             dAIC df
+# count_mod5.1 0.0  7 
+# count_mod5.3 1.0  6 
+# count_mod5.4 1.5  8 
+# count_mod5.2 5.8  4 
+# count_mod11  6.1  6 
+
+simulateResiduals(count_mod5.1, plot = T)  
+simulateResiduals(count_mod5.2, plot = T)
+simulateResiduals(count_mod5.3, plot = T)
+simulateResiduals(count_mod5.4, plot = T)
+```
+
+```{r}
+summary(count_mod5.1)
+Anova(count_mod5.1)
+
+summary(count_mod5.3)
+Anova(count_mod5.3)
+
+summary(count_mod5.4)
+Anova(count_mod5.4, type = "III")
+```
+
+```{r}
+# try adding dispersion formula to model 11 
+count_mod11.2 <- glmmTMB(Count ~ Treatment + Wing_mm*Crithidia_date, dispformula = ~Wing_mm*Crithidia_date, data = bees, family = nbinom2())
+
+count_mod11.3 <- glmmTMB(Count ~ Treatment + Wing_mm + Crithidia_date, dispformula = ~Wing_mm*Crithidia_date, data = bees, family = nbinom2())
+
+# remove date, go back to mod 5 but keep date in dispersion formula 
+count_mod5.5 <- glmmTMB(Count ~ Treatment + Wing_mm, dispformula = ~Wing_mm*Crithidia_date, data = bees, family = nbinom2())
+simulateResiduals(count_mod5.5, plot = T)  
+
+count_mod5.6 <- glmmTMB(Count ~ Treatment + Wing_mm + (1|Crithidia_date), dispformula = ~Wing_mm*Crithidia_date, data = bees, family = nbinom2())
+
+count_mod5.7 <- glmmTMB(Count ~ Treatment + Wing_mm + (1|Crithidia_date), dispformula = ~Wing_mm + Crithidia_date, data = bees, family = nbinom2())
+simulateResiduals(count_mod5.7, plot = T)
+summary(count_mod5.7)
+
+count_mod5.8 <- glmmTMB(Count ~ Treatment + Wing_mm, dispformula = ~Wing_mm + Crithidia_date, data = bees, family = nbinom2())
+simulateResiduals(count_mod5.8, plot = T) # best so far 
+Anova(count_mod5.8)
+
+count_mod11.4 <- glmmTMB(Count ~ Treatment + Wing_mm + Crithidia_date, dispformula = ~Wing_mm + Crithidia_date, data = bees, family = nbinom2())
+simulateResiduals(count_mod11.4, plot = T) # also good 
+summary(count_mod11.4)
+
+AICtab(count_mod5.1,count_mod5.2, count_mod5, count_mod5.3, count_mod5.4, count_mod11, count_mod11.2, count_mod11.3, count_mod5.5, count_mod5.6, count_mod5.7, count_mod5.8, count_mod11.4)
+
+#               dAIC df
+# count_mod5.8   0.0 6 
+# count_mod5.5   2.0 7 
+# count_mod11.4  2.0 7 
+# count_mod5.7   2.0 7 
+# count_mod11.3  4.0 8 
+# count_mod5.6   4.0 8 
+# count_mod11.2  4.9 9 
+# count_mod5.1   5.3 7 
+# count_mod5.3   6.3 6 
+# count_mod5.4   6.8 8 
+# count_mod5.2  11.1 4 
+# count_mod5    11.1 4 
+# count_mod11   11.4 6 
+
+# check zero inflation
+count_mod5.8.zi <- glmmTMB(Count ~ Treatment + Wing_mm, dispformula = ~Wing_mm + Crithidia_date, ziformula = ~Crithidia_date, data = bees, family = nbinom2())
+
+AICtab(count_mod5.8, count_mod5.8.zi)
+#                 dAIC df
+# count_mod5.8    0    6 
+# count_mod5.8.zi 3    8 
+simulateResiduals(count_mod5.8.zi, plot = T)
+summary(count_mod5.8.zi)
+```
+
+MODEL TO USE: count_mod5.8 
+
+```{r}
+simulateResiduals(count_mod5.8, plot = T) # looks great 
+Anova(count_mod5.8)
+# 
+#            Chisq Df Pr(>Chisq)  
+# Treatment 0.0694  1    0.79227  
+# Wing_mm   2.9622  1    0.08523 .
+```
+
+## Plot gut infections 
+```{r}
+means <- emmeans(count_mod5.8, ~ Treatment, type = "response")
+counts.means.to.plot<-as.data.frame(summary(means))
+counts.means.to.plot$upperSE <- counts.means.to.plot$response + counts.means.to.plot$SE
+counts.means.to.plot$lowerSE <- counts.means.to.plot$response - counts.means.to.plot$SE
+counts.means.to.plot
+```
+
+```{r}
+gut_barplot<- 
+  ggplot(counts.means.to.plot,aes(x=Treatment, y=response, ymin=lowerSE, ymax=upperSE)) + 
+  theme_classic() +
+  geom_bar(stat="identity", aes(fill = Treatment), color = "black") +
+  scale_fill_manual(values=c("sienna4", "goldenrod1"),
+                    labels = c("buckwheat","sunflower")) +
+  ylab(expression(paste(italic("Crithidia"), " cells in 0.02 μL of gut"))) +
+  xlab("\n Treatment") +
+  geom_errorbar(width=0.05, position=position_dodge(width = 0.075))+
+  theme(text = element_text(size=18),
+        legend.position = "none") +
+  scale_x_discrete(labels = c("Buckwheat", "Sunflower")) +
+  ylim(0, 22) + 
+  geom_text(x = 1.5, y = 20, label = expression(paste("Treatment: ", italic("P"), "= 0.79")), size = 5)
+
+gut_barplot
+```
+
+## Gut count presence/absence
+### Make presence/absence column
+
+```{r}
+# remove NAs 
+bees_noNAs <- bees %>% 
+  filter(Wing_mm != is.na(Wing_mm))
+  
+# make a new column with 0 or 1
+bees_noNAs$Cells_P <- NA
+
+for(i in 1:length(bees_noNAs$Count)){
+  if(bees_noNAs$Count[i] > 0) {
+    bees_noNAs$Cells_P[i] <- 1
+  } else {
+    bees_noNAs$Cells_P[i] <- 0
+  }
+} 
+```
+
+### Model presence/absence 
+
+```{r}
+gut_PA_mod <- glmer(Cells_P ~ Treatment + Wing_mm + (1|Crithidia_date) + (1|Colony), 
+                      family = binomial(link = "logit"), data = bees_noNAs)
+
+gut_PA_mod2 <- glmer(Cells_P ~ Treatment + Wing_mm + (1|Colony), 
+                      family = binomial(link = "logit"), data = bees_noNAs)
+
+gut_PA_mod3 <- glmer(Cells_P ~ Treatment + Wing_mm + (1|Crithidia_date), 
+                      family = binomial(link = "logit"), data = bees_noNAs)
+
+gut_PA_mod4 <- glm(Cells_P ~ Treatment + Wing_mm, 
+                      family = binomial(link = "logit"), data = bees_noNAs)
+
+AICtab(gut_PA_mod, gut_PA_mod2, gut_PA_mod3, gut_PA_mod4) # 2 best 
+
+simulateResiduals(gut_PA_mod2, plot = T) # looks good 
+Anova(gut_PA_mod2)
+```
+
+### Plot presence/absence 
+```{r}
+gut.PA.means <- emmeans(gut_PA_mod2, ~ Treatment, type = "response")
+gut.PA.means.to.plot<-as.data.frame(summary(gut.PA.means))
+gut.PA.means.to.plot$upperSE <- gut.PA.means.to.plot$prob + gut.PA.means.to.plot$SE
+gut.PA.means.to.plot$lowerSE <- gut.PA.means.to.plot$prob - gut.PA.means.to.plot$SE
+gut.PA.means.to.plot
+```
+
+```{r}
+gut_PA_barplot <- 
+  ggplot(gut.PA.means.to.plot,aes(x=Treatment, y=prob, ymin=lowerSE, ymax=upperSE)) + 
+  theme_classic() +
+  geom_bar(stat="identity", aes(fill = Treatment), color = "black") +
+  scale_fill_manual(values=c("sienna4", "goldenrod1"),
+                    labels = c("buckwheat","sunflower")) +
+  ylab("Probability of cells in 0.02 μL gut") +
+  xlab("\n Treatment") +
+  geom_errorbar(width=0.05, position=position_dodge(width = 0.075))+
+  theme(text = element_text(size=18),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5)) +
+  scale_x_discrete(labels = c("Buckwheat", "Sunflower")) +
+  ylim(0, 1.1) + 
+  geom_text(x = 1.5, y = 1, label = expression(paste("Treatment: ", italic("P"), "= 0.44")), size = 5) 
+
+gut_PA_barplot
+```
+
+# Fecal screens 
+
+## Get set up
+
+```{r}
+bees_sub <- bees[,1:10]
+feces_dates2 <- merge(feces, bees_sub, by = "Bee_ID")
+feces_dates2$Treatment.x <- as.factor(feces_dates2$Treatment.x)
+
+# rename these columns 
+colnames(feces_dates2)[8] <- "Cells_per_ul"
+colnames(feces_dates2)[5] <- "Feces_line_length_mm"
+colnames(feces_dates2)[10] <- "Feces_conc"
+colnames(feces_dates2)[4] <- "Cells_presence"
+
+# rename bw and sf 
+levels(feces_dates2$Treatment.x) <- c("Buckwheat", "Sunflower")
+
+# add column for volume 
+feces_dates2 <- feces_dates2 %>% mutate(fecal_vol = ((Feces_line_length_mm*25)/65))
+```
+
+## Summaries
+
+```{r}
+feces_dates2 %>% group_by(Colony, Treatment.x) %>% summarize(length(Treatment.x))
+feces_dates2 %>% group_by(Treatment.x) %>% summarize(length(Treatment.x))
+```
+
+## Models 
+ 
+### Model bee size by colony
+```{r}
+hist(feces_dates2$Wing_mm)
+wing_mod <- lm(Wing_mm ~ Colony, data = feces_dates2)
+simulateResiduals(wing_mod, plot = T)
+Anova(wing_mod)
+```
+
+### Model fecal volume 
+```{r}
+hist(feces_dates2$fecal_vol)
+
+# with date as fixed effect 
+fecal_vol_mod <- lm(fecal_vol ~ Treatment.x + Wing_mm + Crithidia_date, data = feces_dates2)
+simulateResiduals(fecal_vol_mod, plot = T)  
+vif(fecal_vol_mod)
+Anova(fecal_vol_mod)
+
+# with colony as fixed effect 
+fecal_vol_mod2 <- lm(fecal_vol ~ Treatment.x + Wing_mm + Colony, data = feces_dates2)
+simulateResiduals(fecal_vol_mod2, plot = T)
+Anova(fecal_vol_mod2)
+
+fecal_vol_mod3 <- lm(fecal_vol ~ Colony, data = feces_dates2)
+simulateResiduals(fecal_vol_mod3, plot = T)
+Anova(fecal_vol_mod3)
+
+fecal_vol_mod4 <- lm(fecal_vol ~ Colony + Wing_mm + Treatment.x, data = feces_dates2)
+simulateResiduals(fecal_vol_mod4, plot = T)
+Anova(fecal_vol_mod4)
+
+fecal_vol_mod5 <- lm(fecal_vol ~ Wing_mm, data = feces_dates2)
+simulateResiduals(fecal_vol_mod5, plot = T)
+Anova(fecal_vol_mod5)
+```
+
+### Model cells per ul feces
+
+#### Remove NAs 
+```{r}
+hist(feces_dates2$Cells_per_ul, breaks= 100)
+
+# remove NAs
+feces_dates2_noNAs <- feces_dates2 %>% 
+  filter(Cells_presence != is.na(Cells_presence))
+```
+
+#### Model with calculated cells per microliter using neg binom and ZI
+```{r}
+hist(feces_dates2_noNAs$Cells_per_ul)
+
+# try different variables in the ZI formula 
+feces_mod3 <- glmmTMB(Cells_per_ul ~ Treatment.x + Wing_mm + fecal_vol + (1|Colony), 
+                      data = feces_dates2, 
+                      family = nbinom2(),
+                      ziformula = ~Treatment.x + Wing_mm + fecal_vol) # all 3 
+simulateResiduals(feces_mod3, plot = T) # looks good 
+
+feces_mod3.1 <- glmmTMB(Cells_per_ul ~ Treatment.x + Wing_mm + fecal_vol + (1|Colony), 
+                      data = feces_dates2, 
+                      family = nbinom2(),
+                      ziformula = ~Treatment.x + Wing_mm) # treat and wing 
+simulateResiduals(feces_mod3.1, plot = T) # good 
+
+feces_mod3.2 <- glmmTMB(Cells_per_ul ~ Treatment.x + Wing_mm + fecal_vol+ (1|Colony), 
+                      data = feces_dates2, 
+                      family = nbinom2(),
+                      ziformula = ~Treatment.x + fecal_vol) # treat and feces 
+simulateResiduals(feces_mod3.2, plot = T) # good
+
+feces_mod3.3 <- glmmTMB(Cells_per_ul ~ Treatment.x + Wing_mm + fecal_vol + (1|Colony), 
+                      data = feces_dates2, 
+                      family = nbinom2(),
+                      ziformula = ~Wing_mm + fecal_vol) # feces and wing 
+simulateResiduals(feces_mod3.3, plot = T) # good
+
+AICtab(feces_mod3, feces_mod3.1, feces_mod3.2, feces_mod3.3) 
+
+#              dAIC df
+# feces_mod3.3  0.0 9 
+# feces_mod3    1.7 10
+# feces_mod3.1  6.2 9 
+# feces_mod3.2  6.9 9 
+
+Anova(feces_mod3.3)
+# Response: Cells_per_ul
+#              Chisq Df Pr(>Chisq)  
+# Treatment.x 0.0780  1    0.78007  
+# Wing_mm     0.0980  1    0.75419  
+# fecal_vol   5.5357  1    0.01863 *
+```
+
+#### Plot barplot 
+```{r}
+feces.means <- emmeans(feces_mod3.3, ~ Treatment.x, type = "response")
+feces.means.to.plot<-as.data.frame(summary(feces.means))
+feces.means.to.plot$upperSE <- feces.means.to.plot$response + feces.means.to.plot$SE
+feces.means.to.plot$lowerSE <- feces.means.to.plot$response - feces.means.to.plot$SE
+feces.means.to.plot
+```
+
+```{r}
+feces_barplot<- 
+  ggplot(feces.means.to.plot,aes(x=Treatment.x, y=response, ymin=lowerSE, ymax=upperSE)) + 
+  theme_classic() +
+  geom_bar(stat="identity", aes(fill = Treatment.x), color = "black") +
+  scale_fill_manual(values=c("sienna4", "goldenrod1"),
+                    labels = c("buckwheat","sunflower")) +
+  ylab(expression(paste(italic("Crithidia"), " cells in 1 μL feces"))) +
+  xlab(" ") +
+  geom_errorbar(width=0.05, position=position_dodge(width = 0.075))+
+  theme(text = element_text(size=18),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5)) +
+  scale_x_discrete(labels = c("Buckwheat", "Sunflower")) +
+  ylim(0, 2500) + 
+  geom_text(x = 1.5, y = 2250, label = expression(paste("Treatment: ", italic("P"), "= 0.78")), size = 5) 
+
+feces_barplot
+
+ggsave(
+  "feces_barplot.jpg",
+  plot = feces_barplot,
+  width = 2000,
+  height =1800,
+  units = "px",
+  dpi = 300
+)
+```
+
+## Fecal screen presence/absence
+### Make presence/absence column
+
+```{r}
+# make a new column with 0 or 1 instead of no or yes 
+feces_dates2_noNAs$Cells_presence2 <- NA
+
+for(i in 1:length(feces_dates2_noNAs$Cells_presence)){
+  if(feces_dates2_noNAs$Cells_presence[i] == "yes") {
+    feces_dates2_noNAs$Cells_presence2[i] <- 1
+  } else {
+    feces_dates2_noNAs$Cells_presence2[i] <- 0
+  }
+} 
+```
+
+### Model presence/absence 
+
+```{r}
+feces_PA_mod <- glmer(Cells_presence2 ~ Treatment.x + Wing_mm + fecal_vol + (1|Crithidia_date) + (1|Colony), 
+                      family = binomial(link = "logit"), data = feces_dates2_noNAs)
+
+feces_PA_mod2 <- glmer(Cells_presence2 ~ Treatment.x + Wing_mm + fecal_vol + (1|Colony), 
+                      family = binomial(link = "logit"), data = feces_dates2_noNAs)
+
+feces_PA_mod3 <- glmer(Cells_presence2 ~ Treatment.x + Wing_mm + fecal_vol + (1|Crithidia_date), 
+                      family = binomial(link = "logit"), data = feces_dates2_noNAs)
+
+feces_PA_mod4 <- glm(Cells_presence2 ~ Treatment.x + Wing_mm + fecal_vol, 
+                      family = binomial(link = "logit"), data = feces_dates2_noNAs)
+
+AICtab(feces_PA_mod, feces_PA_mod2, feces_PA_mod3, feces_PA_mod4) # 4 best 
+
+simulateResiduals(feces_PA_mod4, plot = T) # looks good 
+
+Anova(feces_PA_mod4)
+# Response: Cells_presence2
+#                      LR Chisq Df Pr(>Chisq)   
+# Treatment              0.2619  1   0.608822   
+# Wing_mm                7.1817  1   0.007365 **
+# Feces_line_length_mm   6.4816  1   0.010900 * 
+```
+
+### Plot presence/absence 
+
+```{r}
+feces.PA.means <- emmeans(feces_PA_mod4, ~ Treatment.x, type = "response")
+feces.PA.means.to.plot<-as.data.frame(summary(feces.PA.means))
+feces.PA.means.to.plot$upperSE <- feces.PA.means.to.plot$prob + feces.PA.means.to.plot$SE
+feces.PA.means.to.plot$lowerSE <- feces.PA.means.to.plot$prob - feces.PA.means.to.plot$SE
+feces.PA.means.to.plot
+```
+
+```{r}
+feces_PA_barplot <- 
+  ggplot(feces.PA.means.to.plot,aes(x=Treatment.x, y=prob, ymin=lowerSE, ymax=upperSE)) + 
+  theme_classic() +
+  geom_bar(stat="identity", aes(fill = Treatment.x), color = "black") +
+  scale_fill_manual(values=c("sienna4", "goldenrod1"),
+                    labels = c("buckwheat","sunflower")) +
+  ylab("Probability of cells in 1 μL feces ") +
+  xlab(" ") +
+  geom_errorbar(width=0.05, position=position_dodge(width = 0.075))+
+  theme(text = element_text(size=18),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5)) +
+  scale_x_discrete(labels = c("Buckwheat", "Sunflower")) +
+  ylim(0, 1.1) + 
+  geom_text(x = 1.5, y = 1, label = expression(paste("Treatment: ", italic("P"), "= 0.61")), size = 5) 
+
+feces_PA_barplot
+```
+
+### COMBINE FOUR BARPLOTS FOR FIGURE 2! 
+
+```{r}
+fig2 <- ggarrange(feces_barplot, feces_PA_barplot,
+                  gut_barplot, gut_PA_barplot,
+                  nrow = 2, ncol = 2,
+                  labels = c("a", "b", "c", "d"),
+                  common.legend = F)
+
+fig2
+
+ggsave(
+  "Yost-fig2.jpg",
+  plot = fig2,
+  width = 3200,
+  height =3200,
+  units = "px",
+  dpi = 300
+)
+```
